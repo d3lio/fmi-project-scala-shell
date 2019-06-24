@@ -1,15 +1,32 @@
 package console.parser
 
+import scala.sys.process.{Process, ProcessBuilder}
+import java.io.File
+
 object Parser {
   sealed trait Error { def message: String }
   case class UnclosedQuote(message: String = "Unclosed quote in input") extends Error
   case class EmptyCommand(message: String = "Empty command due to badly placed operator") extends Error
+  case class UnexpectedTrailingOperator(message: String = "Unexpected trailing operator") extends Error
+
+  def parse(input: String, cwd: File, aliases: Map[String, String]): Either[Error, Option[ProcessBuilder]] = {
+    if (input.trim.isEmpty) {
+      Right(None)
+    } else {
+      parseInput(input).flatMap(ast => {
+          buildProcessTree(ast.map {
+            case Command(name, args) => Command(aliases.getOrElse(name, name), args)
+            case x => x
+          }, cwd)
+      })
+    }
+  }
 
   /**
    * Parse the input string and return a sequence of sequences where the head of each sequence
    * is the name of the command and the tail represents the arguments.
    */
-  def parse(input: String): Either[Error, Seq[Ast]] = {
+  def parseInput(input: String): Either[Error, Seq[Ast]] = {
     Right(splitStream(input, """(?<!\\)\"""", -1))
       .flatMap(parseLiterals)
       .map(removeEmptyParts)
@@ -78,6 +95,31 @@ object Parser {
       case Seq(And(_)) => Operator(OperatorKind.And)
       case Seq(Or(_)) => Operator(OperatorKind.Or)
       case tokens => Command(tokens.head.value, tokens.tail.map(_.value))
+    }
+  }
+
+  private def buildProcessTree(ast: Seq[Ast], cwd: File): Either[Error, Option[ProcessBuilder]] = {
+    val (builder, op) = ast.foldLeft[(Option[ProcessBuilder], Option[Operator])]((None, None)){
+      case ((None, None), Command(name, args)) =>
+        (Some(Process.apply(name +: args, cwd)), None)
+
+      case ((Some(proc), None), Operator(kind)) =>
+        (Some(proc), Some(Operator(kind)))
+
+      case ((Some(proc), Some(Operator(OperatorKind.Pipe))), Command(name, args)) =>
+        (Some(proc #| Process.apply(name +: args, cwd)), None)
+      case ((Some(proc), Some(Operator(OperatorKind.And))), Command(name, args)) =>
+        (Some(proc #&& Process.apply(name +: args, cwd)), None)
+      case ((Some(proc), Some(Operator(OperatorKind.Or))), Command(name, args)) =>
+        (Some(proc #|| Process.apply(name +: args, cwd)), None)
+
+      case state => throw new Exception(s"Unexpected parser state $state")
+    }
+
+    if (op.isDefined) {
+      Left(UnexpectedTrailingOperator())
+    } else {
+      Right(builder)
     }
   }
 }
