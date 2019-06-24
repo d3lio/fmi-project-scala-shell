@@ -31,6 +31,7 @@ class Shell(cwd: File, history: Seq[String] = Seq(), variables: Map[String, Stri
       .lex(input)
       .map(Parser.parse)
       .flatMap(Parser.substituteVariables(_, variables))
+      .flatMap(Parser.substituteEnvVariables)
       .flatMap(Parser.buildProcessTree(_, cwd))
 
     match {

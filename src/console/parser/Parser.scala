@@ -1,6 +1,7 @@
 package console.parser
 
 import scala.sys.process.{Process, ProcessBuilder}
+import scala.util.Properties
 import java.io.File
 
 object Parser {
@@ -29,6 +30,22 @@ object Parser {
   }
 
   def substituteVariables(ast: Seq[Ast], variables: Map[String, String]): Either[Error, Seq[Ast]] = {
+    def value(expr: String, variables: Map[String, String]): Either[Error, String] = {
+      val name = if (expr.startsWith("@")) {
+        Some(expr.substring(1))
+      } else {
+        None
+      }
+
+      name match {
+        case Some(n) => variables.get(n) match {
+          case Some(value) => Right(value)
+          case None => Left(UndefinedVariable(s"Undefined variable @$n"))
+        }
+        case None => Right(expr)
+      }
+    }
+
     ast.foldLeft[Either[Error, Seq[Ast]]](Right(Seq())){
       case (Right(acc), Command(name, args)) =>
         (name +: args)
@@ -38,6 +55,41 @@ object Parser {
             case (Left(errAcc), Left(err)) => Left(errAcc :+ err)
             case (_, Left(err)) => Left(Seq(err))
           }
+          .fold(
+            errs => Left(MultipleErrors(errs)),
+            seq => Right(acc :+ Command(seq.head, seq.tail))
+          )
+      case (Right(acc), operator) => Right(acc :+ operator)
+      case (left, _) => left
+    }
+  }
+
+  def substituteEnvVariables(ast: Seq[Ast]): Either[Error, Seq[Ast]] = {
+    def value(expr: String): Either[Error, String] = {
+      val name = if (expr.startsWith("$")) {
+        Some(expr.substring(1))
+      } else {
+        None
+      }
+
+      name match {
+        case Some(n) => Properties.envOrNone(n) match {
+          case Some(value) => Right(value)
+          case None => Left(UndefinedVariable(s"Undefined environment variable $$$n"))
+        }
+        case None => Right(expr)
+      }
+    }
+
+    ast.foldLeft[Either[Error, Seq[Ast]]](Right(Seq())){
+      case (Right(acc), Command(name, args)) =>
+        (name +: args)
+          .map(value)
+          .foldLeft[Either[Seq[Error], Seq[String]]](Right(Seq())){
+          case (Right(seq), Right(str)) => Right(seq :+ str)
+          case (Left(errAcc), Left(err)) => Left(errAcc :+ err)
+          case (_, Left(err)) => Left(Seq(err))
+        }
           .fold(
             errs => Left(MultipleErrors(errs)),
             seq => Right(acc :+ Command(seq.head, seq.tail))
@@ -66,22 +118,6 @@ object Parser {
       Left(UnexpectedTrailingOperator())
     } else {
       Right(builder)
-    }
-  }
-
-  private def value(expr: String, variables: Map[String, String]): Either[Error, String] = {
-    val name = if (expr.startsWith("@")) {
-      Some(expr.substring(1))
-    } else {
-      None
-    }
-
-    name match {
-      case Some(n) => variables.get(n) match {
-        case Some(value) => Right(value)
-        case None => Left(UndefinedVariable(s"Undefined variable @$n"))
-      }
-      case None => Right(expr)
     }
   }
 }
