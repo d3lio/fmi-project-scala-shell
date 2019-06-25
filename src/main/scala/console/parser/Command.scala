@@ -4,10 +4,10 @@ object OperatorKind extends Enumeration {
   type OperatorKind = Value
   val Pipe, Or, And = Value
 }
-import console.parser.OperatorKind.OperatorKind
+import OperatorKind._
 
 sealed trait Ast
-case class Command(name: String, args: Seq[String]) extends Ast {
+case class Command(name: String, args: Seq[String] = Seq()) extends Ast {
   override def toString: String = (name +: args).mkString(" ")
 }
 case class Operator(kind: OperatorKind) extends Ast {

@@ -2,7 +2,7 @@ package console
 
 import java.io.File
 
-import console.parser.{Lexer, Parser}
+import parser.{Lexer, Parser}
 
 import scala.io.StdIn
 import scala.language.postfixOps

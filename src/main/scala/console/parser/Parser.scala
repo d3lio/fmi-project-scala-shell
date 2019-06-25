@@ -170,10 +170,10 @@ object Parser {
         (name +: args)
           .map(value)
           .foldLeft[Either[Seq[Error], Seq[String]]](Right(Seq())){
-          case (Right(seq), Right(str)) => Right(seq :+ str)
-          case (Left(errAcc), Left(err)) => Left(errAcc :+ err)
-          case (_, Left(err)) => Left(Seq(err))
-        }
+            case (Right(seq), Right(str)) => Right(seq :+ str)
+            case (Left(errAcc), Left(err)) => Left(errAcc :+ err)
+            case (_, Left(err)) => Left(Seq(err))
+          }
           .fold(
             errs => Left(MultipleErrors(errs)),
             seq => Right(acc :+ Command(seq.head, seq.tail))
