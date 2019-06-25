@@ -1,8 +1,9 @@
 package console.parser
 
+import java.io.File
+
 import scala.sys.process.{Process, ProcessBuilder}
 import scala.util.Properties
-import java.io.File
 
 object Parser {
   sealed trait Error { def message: String }
@@ -30,7 +31,7 @@ object Parser {
   }
 
   def substituteVariables(ast: Seq[Ast], variables: Map[String, String]): Either[Error, Seq[Ast]] = {
-    def value(expr: String, variables: Map[String, String]): Either[Error, String] = {
+    def value(expr: String): Either[Error, String] = {
       val name = if (expr.startsWith("@")) {
         Some(expr.substring(1))
       } else {
@@ -46,22 +47,7 @@ object Parser {
       }
     }
 
-    ast.foldLeft[Either[Error, Seq[Ast]]](Right(Seq())){
-      case (Right(acc), Command(name, args)) =>
-        (name +: args)
-          .map(value(_, variables))
-          .foldLeft[Either[Seq[Error], Seq[String]]](Right(Seq())){
-            case (Right(seq), Right(str)) => Right(seq :+ str)
-            case (Left(errAcc), Left(err)) => Left(errAcc :+ err)
-            case (_, Left(err)) => Left(Seq(err))
-          }
-          .fold(
-            errs => Left(MultipleErrors(errs)),
-            seq => Right(acc :+ Command(seq.head, seq.tail))
-          )
-      case (Right(acc), operator) => Right(acc :+ operator)
-      case (left, _) => left
-    }
+    substitute(ast, value)
   }
 
   def substituteEnvVariables(ast: Seq[Ast]): Either[Error, Seq[Ast]] = {
@@ -81,6 +67,32 @@ object Parser {
       }
     }
 
+    substitute(ast, value)
+  }
+
+  def buildProcessTree(ast: Seq[Ast], cwd: File): Either[Error, Option[ProcessBuilder]] = {
+    val (builder, op) = ast.foldLeft[(Option[ProcessBuilder], Option[Operator])]((None, None)){
+      case ((None, None), Command(name, args)) => (Some(Process.apply(name +: args, cwd)), None)
+      case ((Some(proc), None), Operator(kind)) => (Some(proc), Some(Operator(kind)))
+
+      case ((Some(proc), Some(Operator(OperatorKind.Pipe))), Command(name, args)) =>
+        (Some(proc #| Process.apply(name +: args, cwd)), None)
+      case ((Some(proc), Some(Operator(OperatorKind.And))), Command(name, args)) =>
+        (Some(proc #&& Process.apply(name +: args, cwd)), None)
+      case ((Some(proc), Some(Operator(OperatorKind.Or))), Command(name, args)) =>
+        (Some(proc #|| Process.apply(name +: args, cwd)), None)
+
+      case state => throw new Exception(s"Unexpected console.parser state $state")
+    }
+
+    if (op.isDefined) {
+      Left(UnexpectedTrailingOperator())
+    } else {
+      Right(builder)
+    }
+  }
+
+  private def substitute(ast: Seq[Ast], value: String => Either[Error, String]): Either[Error, Seq[Ast]] = {
     ast.foldLeft[Either[Error, Seq[Ast]]](Right(Seq())){
       case (Right(acc), Command(name, args)) =>
         (name +: args)
@@ -96,28 +108,6 @@ object Parser {
           )
       case (Right(acc), operator) => Right(acc :+ operator)
       case (left, _) => left
-    }
-  }
-
-  def buildProcessTree(ast: Seq[Ast], cwd: File): Either[Error, Option[ProcessBuilder]] = {
-    val (builder, op) = ast.foldLeft[(Option[ProcessBuilder], Option[Operator])]((None, None)){
-      case ((None, None), Command(name, args)) => (Some(Process.apply(name +: args, cwd)), None)
-      case ((Some(proc), None), Operator(kind)) => (Some(proc), Some(Operator(kind)))
-
-      case ((Some(proc), Some(Operator(OperatorKind.Pipe))), Command(name, args)) =>
-        (Some(proc #| Process.apply(name +: args, cwd)), None)
-      case ((Some(proc), Some(Operator(OperatorKind.And))), Command(name, args)) =>
-        (Some(proc #&& Process.apply(name +: args, cwd)), None)
-      case ((Some(proc), Some(Operator(OperatorKind.Or))), Command(name, args)) =>
-        (Some(proc #|| Process.apply(name +: args, cwd)), None)
-
-      case state => throw new Exception(s"Unexpected parser state $state")
-    }
-
-    if (op.isDefined) {
-      Left(UnexpectedTrailingOperator())
-    } else {
-      Right(builder)
     }
   }
 }

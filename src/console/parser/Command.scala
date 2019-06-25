@@ -4,7 +4,7 @@ object OperatorKind extends Enumeration {
   type OperatorKind = Value
   val Pipe, Or, And = Value
 }
-import OperatorKind._
+import console.parser.OperatorKind.OperatorKind
 
 sealed trait Ast
 case class Command(name: String, args: Seq[String]) extends Ast
