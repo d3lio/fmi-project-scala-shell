@@ -2,7 +2,7 @@ package console
 
 import java.io.File
 
-import console.parser.Lexer
+import console.parser.{Lexer, Parser}
 
 import scala.io.StdIn
 import scala.language.postfixOps
@@ -10,12 +10,12 @@ import scala.sys.process._
 
 case class PromptResult(input: String, status: Int, cwd: File)
 
-// TODO settings vars, source, history, cd, exit, !command_no, printvars
+// TODO setting vars, source
 class Shell(cwd: File, history: Seq[String] = Seq(), variables: Map[String, String] = Map()) {
 
   def repl(): Seq[String] = {
     def helper(cwd: File, history: Seq[String]): Seq[String] = {
-      prompt(cwd) match {
+      prompt(cwd, history) match {
         case Some(PromptResult(input, status, nextCwd)) =>
           if (status != 0) println(s"Process exit status: $status")
           helper(nextCwd, history :+ input)
@@ -25,21 +25,26 @@ class Shell(cwd: File, history: Seq[String] = Seq(), variables: Map[String, Stri
     helper(cwd, history)
   }
 
-  private def prompt(cwd: File): Option[PromptResult] = {
+  private def prompt(cwd: File, history: Seq[String]): Option[PromptResult] = {
     val input = StdIn.readLine(s"${cwd.getAbsolutePath} > ")
 
     Lexer
       .lex(input)
-      .map(parser.Parser.parse)
-      .flatMap(parser.Parser.substituteVariables(_, variables))
-      .flatMap(parser.Parser.substituteEnvVariables)
-      .flatMap(parser.Parser.buildProcessTree(_, cwd))
+      .map(Parser.parse)
+      .flatMap(Parser.substituteHistory(_, history))
+      .flatMap(Parser.substituteVariables(_, variables))
+      .flatMap(Parser.substituteEnvVariables)
+      .flatMap(Parser.parseReserved(_, cwd, history))
+      .flatMap{ case (ast, cwd, substituted) => Parser.buildProcessTree(ast, cwd).map((_, cwd, substituted)) }
     match {
       case Left(err) =>
         println(err.message)
         None
-      case Right(Some(process)) => Some(PromptResult(input, runProcessTree(process), cwd))
-      case _ => None
+      case Right((Some(process), cwd, substituted)) => Some(PromptResult(substituted, runProcessTree(process), cwd))
+      case Right((_, cwd, substituted)) if input.trim.nonEmpty =>
+        Some(PromptResult(substituted, 0, cwd))
+      case _ =>
+        None
     }
   }
 

@@ -1,6 +1,7 @@
 package console.parser
 
 import java.io.File
+import java.nio.file.Paths
 
 import scala.sys.process.{Process, ProcessBuilder}
 import scala.util.Properties
@@ -13,6 +14,11 @@ object Parser {
   case class UndefinedVariable(message: String = "Undefined variable") extends Error
   case class MultipleErrors(errors: Seq[Error]) extends Error {
     val message: String = errors.map(_.message).mkString("\n")
+  }
+  case class HistoryExecNonZeroArguments(message: String =
+                                         "Do not pass arguments to running commands from history") extends Error
+  case class PathDoesNotExist(file: File) extends Error {
+    val message: String = s"Path does not exist ${file.toString}"
   }
 
   def parse(tokens: Seq[Token]): Seq[Ast] = {
@@ -28,6 +34,39 @@ object Parser {
     }
 
     res :+ seqToCommand(last)
+  }
+
+  def substituteHistory(ast: Seq[Ast], history: Seq[String]): Either[Error, Seq[Ast]] = {
+    def value(expr: String): Either[Error, Option[String]] = {
+      val name = if (expr.startsWith("!")) {
+        Some(expr.substring(1))
+      } else {
+        None
+      }
+
+      name match {
+        case Some(n) => history.lift(n.toInt) match {
+          case None => Left(UndefinedVariable(s"History entry !$n not found"))
+          case some => Right(some)
+        }
+        case None => Right(None)
+      }
+    }
+
+    ast.foldLeft[Either[Error, Seq[Ast]]](Right(Seq())){
+      case (Right(acc), Command(name, args)) =>
+        value(name).flatMap{
+          case Some(value) =>
+            if (args.nonEmpty) {
+              Left(HistoryExecNonZeroArguments())
+            } else {
+              Lexer.lex(value).map(parse)
+            }
+          case None => Right(Seq(Command(name, args)))
+        }.map(acc ++ _)
+      case (Right(acc), operator) => Right(acc :+ operator)
+      case (left, _) => left
+    }
   }
 
   def substituteVariables(ast: Seq[Ast], variables: Map[String, String]): Either[Error, Seq[Ast]] = {
@@ -70,6 +109,26 @@ object Parser {
     substitute(ast, value)
   }
 
+  def parseReserved(ast: Seq[Ast], cwd: File, history: Seq[String]): Either[Error, (Seq[Ast], File, String)] = {
+    ast.headOption match {
+      case Some(Command(name, args)) => {
+        name match {
+          case "cd" =>
+            val dir = args.headOption.map(cd(cwd, _)).getOrElse(Right(cwd))
+            dir.map(dir => (ast.slice(2, ast.length), dir, s"cd $dir"))
+          case "exit" =>
+            System.exit(0)
+            Right((ast.slice(2, ast.length), cwd, "exit"))
+          case "history" =>
+            history.zipWithIndex.foreach{ case (line, idx) => println(s"$idx\t$line") }
+            Right((ast.slice(2, ast.length), cwd, "history"))
+          case _ => Right((ast, cwd, ast.mkString(" ")))
+        }
+      }
+      case _ => Right((ast, cwd, ast.mkString(" ")))
+    }
+  }
+
   def buildProcessTree(ast: Seq[Ast], cwd: File): Either[Error, Option[ProcessBuilder]] = {
     val (builder, op) = ast.foldLeft[(Option[ProcessBuilder], Option[Operator])]((None, None)){
       case ((None, None), Command(name, args)) => (Some(Process.apply(name +: args, cwd)), None)
@@ -108,6 +167,13 @@ object Parser {
           )
       case (Right(acc), operator) => Right(acc :+ operator)
       case (left, _) => left
+    }
+  }
+
+  private def cd(cwd: File, to: String): Either[Error, File] = {
+    Paths.get(cwd.getAbsolutePath, to).normalize.toFile match {
+      case file if file.exists() => Right(file)
+      case file => Left(PathDoesNotExist(file))
     }
   }
 }
