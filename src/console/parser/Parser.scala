@@ -20,6 +20,7 @@ object Parser {
   case class PathDoesNotExist(file: File) extends Error {
     val message: String = s"Path does not exist ${file.toString}"
   }
+  case class InvalidSetArguments(message: String = "Command set takes exactly 2 arguments") extends Error
 
   def parse(tokens: Seq[Token]): Seq[Ast] = {
     def seqToCommand(command: Seq[Token]): Ast = {
@@ -111,21 +112,33 @@ object Parser {
 
   def parseReserved(ast: Seq[Ast], cwd: File, history: Seq[String]): Either[Error, (Seq[Ast], File, String)] = {
     ast.headOption match {
-      case Some(Command(name, args)) => {
-        name match {
-          case "cd" =>
-            val dir = args.headOption.map(cd(cwd, _)).getOrElse(Right(cwd))
-            dir.map(dir => (ast.slice(2, ast.length), dir, s"cd $dir"))
-          case "exit" =>
-            System.exit(0)
-            Right((ast.slice(2, ast.length), cwd, "exit"))
-          case "history" =>
-            history.zipWithIndex.foreach{ case (line, idx) => println(s"$idx\t$line") }
-            Right((ast.slice(2, ast.length), cwd, "history"))
-          case _ => Right((ast, cwd, ast.mkString(" ")))
-        }
+      case Some(Command(name, args)) => name match {
+        case "cd" =>
+          val dir = args.headOption.map(cd(cwd, _)).getOrElse(Right(cwd))
+          dir.map(dir => (ast.slice(2, ast.length), dir, s"cd $dir"))
+        case "exit" =>
+          System.exit(0)
+          Right((ast.slice(2, ast.length), cwd, "exit"))
+        case "history" =>
+          history.zipWithIndex.foreach{ case (line, idx) => println(s"$idx\t$line") }
+          Right((ast.slice(2, ast.length), cwd, "history"))
+        case _ => Right((ast, cwd, ast.mkString(" ")))
       }
       case _ => Right((ast, cwd, ast.mkString(" ")))
+    }
+  }
+
+  def parseSet(ast: Seq[Ast], vars: Map[String, String]): Either[Error, (Seq[Ast], Map[String, String])] = {
+    ast.headOption match {
+      case Some(Command(name, args)) =>name match {
+        case "set" =>
+          args match {
+            case Seq(k, v) => Right((ast.slice(2, ast.length), vars + (k -> v)))
+            case _ => Left(InvalidSetArguments())
+          }
+        case _ => Right((ast, vars))
+      }
+      case _ => Right((ast, vars))
     }
   }
 
@@ -171,9 +184,17 @@ object Parser {
   }
 
   private def cd(cwd: File, to: String): Either[Error, File] = {
-    Paths.get(cwd.getAbsolutePath, to).normalize.toFile match {
-      case file if file.exists() => Right(file)
-      case file => Left(PathDoesNotExist(file))
+    val diff = Paths.get(to)
+    if (diff.isAbsolute) {
+      diff.normalize.toFile match {
+        case file if file.exists() => Right(file)
+        case file => Left(PathDoesNotExist(file))
+      }
+    } else {
+      Paths.get(cwd.getAbsolutePath, to).normalize.toFile match {
+        case file if file.exists() => Right(file)
+        case file => Left(PathDoesNotExist(file))
+      }
     }
   }
 }

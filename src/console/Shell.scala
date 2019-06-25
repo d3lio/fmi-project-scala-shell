@@ -8,41 +8,43 @@ import scala.io.StdIn
 import scala.language.postfixOps
 import scala.sys.process._
 
-case class PromptResult(input: String, status: Int, cwd: File)
+case class PromptResult(input: String, status: Int, cwd: File, variables: Map[String, String])
 
-// TODO setting vars, source
 class Shell(cwd: File, history: Seq[String] = Seq(), variables: Map[String, String] = Map()) {
 
   def repl(): Seq[String] = {
-    def helper(cwd: File, history: Seq[String]): Seq[String] = {
-      prompt(cwd, history) match {
-        case Some(PromptResult(input, status, nextCwd)) =>
+    def helper(cwd: File, history: Seq[String], variables: Map[String, String]): Seq[String] = {
+      val input = StdIn.readLine(s"${cwd.getAbsolutePath} > ")
+      eval(input, cwd, history, variables) match {
+        case Some(PromptResult(sub, status, nextCwd, vars)) =>
           if (status != 0) println(s"Process exit status: $status")
-          helper(nextCwd, history :+ input)
-        case _ => helper(cwd, history)
+          helper(nextCwd, history :+ sub, vars)
+        case _ => helper(cwd, history, variables)
       }
     }
-    helper(cwd, history)
+    helper(cwd, history, variables)
   }
 
-  private def prompt(cwd: File, history: Seq[String]): Option[PromptResult] = {
-    val input = StdIn.readLine(s"${cwd.getAbsolutePath} > ")
-
+  private def eval(input: String,
+                   cwd: File,
+                   history: Seq[String],
+                   variables: Map[String, String]): Option[PromptResult] = {
     Lexer
       .lex(input)
       .map(Parser.parse)
       .flatMap(Parser.substituteHistory(_, history))
-      .flatMap(Parser.substituteVariables(_, variables))
-      .flatMap(Parser.substituteEnvVariables)
-      .flatMap(Parser.parseReserved(_, cwd, history))
-      .flatMap{ case (ast, cwd, substituted) => Parser.buildProcessTree(ast, cwd).map((_, cwd, substituted)) }
+      .flatMap(Parser.parseSet(_, variables))
+      .flatMap{ case (ast, vars) => Parser.substituteVariables(ast, vars).map((_, vars)) }
+      .flatMap{ case (ast, vars) => Parser.substituteEnvVariables(ast).map((_, vars)) }
+      .flatMap{ case (ast, vars) => Parser.parseReserved(ast, cwd, history).map(t => (t._1, t._2, t._3, vars)) }
+      .flatMap{ case (ast, cwd, sub, vars) => Parser.buildProcessTree(ast, cwd).map((_, cwd, sub, vars)) }
     match {
       case Left(err) =>
         println(err.message)
         None
-      case Right((Some(process), cwd, substituted)) => Some(PromptResult(substituted, runProcessTree(process), cwd))
-      case Right((_, cwd, substituted)) if input.trim.nonEmpty =>
-        Some(PromptResult(substituted, 0, cwd))
+      case Right((Some(process), cwd, sub, vars)) => Some(PromptResult(sub, runProcessTree(process), cwd, vars))
+      case Right((_, cwd, sub, vars)) if input.trim.nonEmpty =>
+        Some(PromptResult(sub, 0, cwd, vars))
       case _ =>
         None
     }
